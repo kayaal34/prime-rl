@@ -79,6 +79,12 @@ FULL_SUITE_CASES = [
     Case("glm_moe_dsa-ep2", "glm_moe_dsa", ep=2),
     Case("glm_moe_dsa-cp2_ep2", "glm_moe_dsa", cp=2, ep=2),
     Case("glm5_next-cp2_ep2", "glm5_next", cp=2, ep=2),
+    # Inkling 2 calls flex attention compiled. An activation checkpoint of an eager layer recomputes it with Dynamo
+    # off, so eagerly and with other ops than its forward, which checkpointing rejects; the eager cases run without
+    # checkpointing. The compiled case runs without activation offloading, like recipes/inkling-2-small.
+    Case("inkling2-ep2", "inkling2", ep=2, overrides={"ac": None, "ac_offloading": None}),
+    Case("inkling2-cp2_ep2", "inkling2", cp=2, ep=2, overrides={"ac": None, "ac_offloading": None}),
+    Case("inkling2-cp2_ep2-compile", "inkling2", cp=2, ep=2, compile=True, overrides={"ac_offloading": None}),
 ]
 SUITES = {"tiny": CASES, "full": FULL_SUITE_CASES}
 TIMEOUTS = {"tiny": 5 * 60, "full": 20 * 60}
