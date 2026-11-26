@@ -1554,6 +1554,56 @@ def test_pd_bidirectional_kv_transfer():
     assert decode["kv_connector_extra_config"] == {"num_threads": 1}
 
 
+def test_pd_spill_to_store_runs_the_store_connector_in_capacity_only_mode():
+    store = {"type": "mooncake", "cpu": {"num_bytes": 1000}}
+    deployment = {
+        "type": "disaggregated",
+        "bidirectional_kv_transfer": {"decode_blocks_ttl_s": 20, "spill_to_store": {}},
+    }
+    config = InferenceConfig(deployment=deployment, kv_cache_offload=store, slurm={})
+    # The router keeps handles past the lease, so a late turn reaches prefill and is fetched from the store.
+    assert config.deployment.bidirectional_kv_transfer.effective_router_ttl_s == 3600
+
+    for role in ("prefill", "decode"):
+        role_config = InferenceConfig(**dump_resolved_config(config.for_pd_role(role), exclude={"deployment", "slurm"}))
+        nixl, mooncake = role_config.build_kv_transfer_config()["kv_connector_extra_config"]["connectors"]
+        assert nixl["kv_connector_extra_config"] == {
+            "num_threads": 1,
+            "bidirectional_kv_xfer": True,
+            "decoder_kv_blocks_ttl": 20,
+            "prime_rl_spill_lead_s": 10.0,
+            "prime_rl_spill_fetch_wait_s": 6.0,
+        }
+        # vLLM's store connector only mounts the client: no lookups, no loads, no saves (not even decode's).
+        assert mooncake == {
+            "kv_connector": "MooncakeStoreConnector",
+            "kv_role": "kv_consumer",
+            "kv_connector_extra_config": {"lookup_async": True, "enable_lookup": False},
+        }
+
+    with pytest.raises(ValidationError, match="needs a Mooncake kv_cache_offload"):
+        InferenceConfig(deployment=deployment, slurm={})
+    with pytest.raises(ValidationError, match="longer than"):
+        InferenceConfig(
+            deployment={
+                **deployment,
+                "bidirectional_kv_transfer": {"decode_blocks_ttl_s": 10, "spill_to_store": {}},
+            },
+            kv_cache_offload=store,
+            slurm={},
+        )
+
+    # Without the spill the store connector keeps its usual role under P/D.
+    plain = InferenceConfig(
+        deployment={"type": "disaggregated", "bidirectional_kv_transfer": {"decode_blocks_ttl_s": 480}},
+        kv_cache_offload=store,
+        slurm={},
+    )
+    mooncake = plain.for_pd_role("decode").build_kv_transfer_config()["kv_connector_extra_config"]["connectors"][1]
+    assert mooncake["kv_role"] == "kv_both" and mooncake["kv_connector_extra_config"]["save_decode_cache"] is True
+    assert "enable_lookup" not in mooncake["kv_connector_extra_config"]
+
+
 CUSTOM_RENDERER_SOURCE = """
 from typing import Literal
 
@@ -1781,6 +1831,30 @@ def test_score_centering_replays_top_p_alone():
     assert sampling.top_k == 10000 and sampling.logprobs == 1
     assert sampling.extra_body["extra_args"]["prl_replay"]
     assert config.inference.enable_return_sampling_mask
+
+
+def test_rl_nvfp4_experts_set_up_matching_engines():
+    def rl(vllm, env_vars=None):
+        return RLConfig.model_validate(
+            {
+                "trainer": {"model": {"moe": {"compute": {"type": "nvfp4", "four_over_six": True}}}},
+                "orchestrator": {},
+                "inference": {"vllm": {"tensor_parallel_size": 1, **vllm}, "env_vars": env_vars or {}},
+                "deployment": {"type": "single_node", "gpus_per_node": 2, "num_train_gpus": 1, "num_infer_gpus": 1},
+            }
+        )
+
+    nvfp4 = {"quantization": "online", "quantization_config": {"linear": "mxfp8", "moe": "nvfp4_per_token"}}
+    config = rl(nvfp4)
+    assert config.inference.env_vars["FLASHINFER_NVFP4_4OVER6"] == "1"
+    assert config.inference.env_vars["FLASHINFER_DISABLE_FP4_QUANT_FAST_MATH"] == "1"
+    assert config.inference.vllm.moe_backend == "flashinfer_trtllm"
+    with pytest.raises(ValueError, match="moe_backend"):
+        rl({**nvfp4, "moe_backend": "flashinfer_cutedsl"})
+    with pytest.raises(ValueError, match="nvfp4_per_token"):
+        rl({"quantization": "mxfp8"})
+    with pytest.raises(ValueError, match="FLASHINFER_NVFP4_4OVER6"):
+        rl(nvfp4, {"FLASHINFER_NVFP4_4OVER6": "0"})
 
 
 @pytest.mark.parametrize("rollouts", [False, True])
