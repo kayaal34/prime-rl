@@ -68,7 +68,7 @@ def test_resumes_from_remote_when_disk_is_empty(tmp_path: Path, config: Checkpoi
     manager = make_manager(tmp_path / "fresh", config, ResumeConfig())
     resumed_model, resumed_optimizer = make_trained(seed=1)
 
-    step = manager.resolve_latest_step()
+    step = manager.resolve_latest_step(None)
     manager.prefetch(step)
     manager.load(step, resumed_model, [resumed_optimizer], Progress())
     manager.close()
@@ -114,18 +114,14 @@ def test_remote_steps_past_the_resume_step_take_no_keep_last_slot(
     assert get_remote_steps(LocalStore(remote_dir))[1] == {4, 5}
 
 
-def test_trainer_only_resume_skips_steps_without_a_complete_trainer_save(
-    tmp_path: Path, config: CheckpointConfig
-) -> None:
+def test_resume_takes_the_later_of_the_disk_step_and_the_remote(tmp_path: Path, config: CheckpointConfig) -> None:
     save(make_manager(tmp_path / "run", config), 3)
     manager = make_manager(tmp_path / "run", config, ResumeConfig())
-    (manager.ckpt_dir / "step_8/orchestrator").mkdir(parents=True)
-    (manager.ckpt_dir / "step_12/trainer").mkdir(parents=True)
 
-    steps = (manager.resolve_latest_step(), manager.resolve_latest_step(trainer_only=True))
+    steps = (manager.resolve_latest_step(None), manager.resolve_latest_step(2), manager.resolve_latest_step(8))
     manager.close()
 
-    assert steps == (8, 3)
+    assert steps == (3, 3, 8)
 
 
 @pytest.mark.parametrize(

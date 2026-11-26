@@ -52,13 +52,12 @@ from prime_rl.trainer.utils import DCP_TIMEOUT, empty_pinned, get_dcp_group
 from prime_rl.trainer.world import get_world
 from prime_rl.utils.logger import format_time, get_logger
 from prime_rl.utils.pathing import (
+    ckpt_output_dir,
     get_all_ckpt_steps,
     get_ckpt_dir,
     get_step_path,
-    get_steps_to_keep,
     is_ckpt_step_complete,
-    resolve_latest_ckpt_step,
-    resolve_latest_trainer_ckpt_step,
+    kept_ckpt_steps,
     try_rmtree,
 )
 
@@ -648,11 +647,10 @@ class CheckpointManager:
         self.pull_step = step
         self._send(f"pull {step}")
 
-    def resolve_latest_step(self, trainer_only: bool = False) -> int | None:
-        """The latest complete step on disk or in the remote, None to start from scratch. ``trainer_only`` skips steps
-        on disk without a trainer checkpoint, as a trainer restarted on its own must: the orchestrator may be ahead."""
-        resolve = resolve_latest_trainer_ckpt_step if trainer_only else resolve_latest_ckpt_step
-        return max((step for step in (resolve(self.ckpt_dir), *self.remote_steps) if step is not None), default=None)
+    def resolve_latest_step(self, disk_step: int | None) -> int | None:
+        """The later of ``disk_step``, the step the caller resolved on disk, and the latest step in the remote. None
+        starts from scratch."""
+        return max((step for step in (disk_step, *self.remote_steps) if step is not None), default=None)
 
     def save_to_path(
         self,
@@ -876,8 +874,8 @@ class CheckpointManager:
         the deletions are queued on node 0's sync process after the uploads, so a step never leaves the disk before it
         is in the remote."""
         remote = self.config.remote
-        steps_to_keep = get_steps_to_keep(self.ckpt_steps, self.config.keep_last, self.config.keep_interval)
-        remote_steps_to_keep = get_steps_to_keep(
+        steps_to_keep = kept_ckpt_steps(self.ckpt_steps, self.config.keep_last, self.config.keep_interval)
+        remote_steps_to_keep = kept_ckpt_steps(
             self.remote_steps, remote and remote.keep_last, remote and remote.keep_interval
         )
         # Only the master deletes, so ranks never race on a shared disk. It owns node 0's sync process
@@ -941,10 +939,6 @@ def setup_ckpt_manager(
     return CheckpointManager(
         ckpt_output_dir(output_dir, ckpt_config), ckpt_config or CheckpointConfig(), model_files, resume
     )
-
-
-def ckpt_output_dir(output_dir: Path, ckpt_config: CheckpointConfig | None) -> Path:
-    return (ckpt_config.output_dir if ckpt_config else None) or output_dir
 
 
 # Compat, remove once no run resumes from such a checkpoint. Full offload used to save the BF16 GPU weights as the model

@@ -7,6 +7,7 @@ from pydantic import Field, field_validator, model_validator
 
 from prime_rl.configs.monitors import MonitorsConfig
 from prime_rl.configs.shared import (
+    BaseCheckpointConfig,
     BaseModelConfig,
     ControlConfig,
     EnvVars,
@@ -637,19 +638,7 @@ class RemoteCheckpointConfig(BaseConfig):
     """Keep remote checkpoints at every N steps permanently. If None, no interval-based keeping."""
 
 
-class CheckpointConfig(BaseConfig):
-    output_dir: Path | None = None
-    """Override directory for checkpoints. If set, checkpoints are written here instead of under the trainer ``output_dir`` — useful for writing large checkpoints to a separate storage volume."""
-
-    interval: int | None = Field(None, ge=1)
-    """Interval at which to save the training checkpoint. If None, only checkpoints at the end of training."""
-
-    keep_last: int | None = Field(None, ge=1)
-    """Keep at most this many recent step checkpoints on disk. If None, never clean old checkpoints based on recency."""
-
-    keep_interval: int | None = Field(None, ge=1)
-    """Keep checkpoints at every N steps permanently (e.g. ``keep_interval=100`` keeps step 100, 200, ...). If None, no interval-based keeping."""
-
+class CheckpointConfig(BaseCheckpointConfig):
     remote: RemoteCheckpointConfig | None = None
     """Mirror checkpoints to an object store. A sync process per node uploads each step once it is on disk, with ``.metadata`` last; ``keep_last``/``keep_interval`` apply to the disk and ``remote.keep_last``/``remote.keep_interval`` to the remote. Resume pulls a step that is not complete on disk while the trainer starts up."""
 
