@@ -431,7 +431,7 @@ def _block_mask(first_key: Tensor) -> BlockMask:
     q_start, q_end, k_start, k_end = starts[:, None], ends[:, None], starts[None], ends[None]
     # The first query of the tile at or after the key tile's start reaches furthest into the key tile.
     first_query = torch.maximum(q_start, k_start)
-    visible = (first_query <= q_end) & (first_key[first_query.clamp(max=row - 1)] <= k_end)
+    visible = (first_query <= q_end) & (first_key[first_query] <= k_end)
     # Like create_block_mask, a tile that the row's end cuts short is never full.
     complete = ends - starts == BLOCK_SIZE - 1
     full = (k_end <= q_start) & (first_key[q_end] <= k_start) & complete[:, None] & complete[None]
